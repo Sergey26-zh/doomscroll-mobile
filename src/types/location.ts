@@ -1,6 +1,21 @@
 export type LocationType =
   | 'COMMERCIAL'
-  | 'SOCIAL';
+  | 'SOCIAL'
+  | 'SPACE'
+  | 'EMBANKMENT'
+  | 'SQUARE'
+  | 'STREET'
+  | 'PARK'
+  | 'COURTYARD'
+  | 'BRIDGE'
+  | 'MONUMENT'
+  | 'SIGHT'
+  | 'EVENT';
+
+export interface RewardPolicyDto {
+  requiredMinutes: number;
+  rewardText: string;
+}
 
 export interface LocationDto {
 
@@ -19,4 +34,12 @@ export interface LocationDto {
   averageCheck?: number;
 
   photoUrl?: string;
+
+  category?: string;
+
+  bssidList?: string[];
+
+  isPopular?: boolean;
+
+  rewardPolicies?: RewardPolicyDto[];
 }
