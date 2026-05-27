@@ -31,7 +31,7 @@ interface DetoxSessionState {
   isLoading: boolean;
   error: string | null;
   pendingInvitations: LobbyInvitationDto[];
-  activeTab: 'map' | 'social' | 'profile';
+  activeTab: 'map' | 'social';
 
   startSession: (locationId: string, latitude: number, longitude: number, name: string, bssids: string[]) => Promise<void>;
   pauseSession: () => Promise<void>;
@@ -48,7 +48,7 @@ interface DetoxSessionState {
   acceptInvitation: (invitationId: string) => Promise<void>;
   declineInvitation: (invitationId: string) => Promise<void>;
   inviteFriends: (usernames: string[]) => Promise<void>;
-  setActiveTab: (tab: 'map' | 'social' | 'profile') => void;
+  setActiveTab: (tab: 'map' | 'social') => void;
 }
 
 let timerInterval: any = null;

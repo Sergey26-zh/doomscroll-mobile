@@ -13,6 +13,11 @@ import {
   RewardResponseDto,
   ActivityDayDto,
   fetchUserActivity,
+  updateUserProfile,
+  UpdateUserProfileDto,
+  searchUserByFriendCode,
+  FriendSearchResultDto,
+  fetchFriendSuggestions,
 } from '../api/users';
 
 interface UserState {
@@ -28,6 +33,9 @@ interface UserState {
   error: string | null;
 
   loadProfile: () => Promise<void>;
+  updateProfile: (payload: UpdateUserProfileDto) => Promise<void>;
+  searchByFriendCode: (friendCode: string) => Promise<FriendSearchResultDto>;
+  searchFriendSuggestions: (query?: string) => Promise<FriendSearchResultDto[]>;
   toggleWalkReady: (status: string) => Promise<void>;
   loadFriends: () => Promise<void>;
   sendRequest: (username: string) => Promise<string>;
@@ -62,12 +70,42 @@ export const useUserStore = create<UserState>((set, get) => ({
     }
   },
 
+  updateProfile: async (payload: UpdateUserProfileDto) => {
+    set({ isLoadingProfile: true, error: null });
+    try {
+      const profile = await updateUserProfile(payload);
+      set({ profile, isLoadingProfile: false });
+    } catch (e: any) {
+      const errMsg = e.response?.data || e.message || 'Ошибка обновления профиля';
+      set({ error: errMsg, isLoadingProfile: false });
+      throw new Error(errMsg);
+    }
+  },
+
+  searchByFriendCode: async (friendCode: string) => {
+    try {
+      return await searchUserByFriendCode(friendCode);
+    } catch (e: any) {
+      const errMsg = e.response?.data || e.message || 'Пользователь не найден';
+      throw new Error(errMsg);
+    }
+  },
+
+  searchFriendSuggestions: async (query?: string) => {
+    try {
+      return await fetchFriendSuggestions(query);
+    } catch (e: any) {
+      const errMsg = e.response?.data || e.message || 'Не удалось загрузить подсказки';
+      throw new Error(errMsg);
+    }
+  },
+
   toggleWalkReady: async (status: string) => {
     try {
       await updateAirOutStatus(status);
       const currentProfile = get().profile;
       if (currentProfile) {
-        set({ profile: { ...currentProfile, status, readyToAirOut: status !== 'busy' } });
+        set({ profile: { ...currentProfile, status, readyToAirOut: status === 'walking' || status === 'transit' } });
       }
     } catch (e: any) {
       console.error('Error updating walk ready status:', e);

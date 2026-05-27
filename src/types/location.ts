@@ -29,13 +29,39 @@ export interface LocationDto {
 
   longitude: number;
 
+  distanceMeters?: number;
+
+  address?: string;
+
   description: string;
+
+  shortDescription?: string;
+
+  visualCategory?: string;
+
+  coverImageKey?: string;
+
+  coverImageUrl?: string;
+
+  isPartner?: boolean;
+
+  rewardType?: string;
+
+  rewardDescription?: string;
+
+  reward?: {
+    type: string;
+    text: string;
+    requiredMinutes?: number | null;
+  } | null;
 
   averageCheck?: number;
 
   photoUrl?: string;
 
   category?: string;
+
+  tags?: string[];
 
   bssidList?: string[];
 

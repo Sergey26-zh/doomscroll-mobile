@@ -20,6 +20,7 @@ import {
   ScrollView,
   Animated,
   TextInput,
+  Linking,
 } from 'react-native';
 
 import * as Location from 'expo-location';
@@ -27,7 +28,7 @@ import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
 import BottomSheet, { BottomSheetView } from '@gorhom/bottom-sheet';
 
-import { LocationType } from '../types/location';
+import { LocationDto, LocationType } from '../types/location';
 import { fetchNearbyLocations } from '../api/locations';
 import { fetchFriendsLocations, FriendLocationDto, FriendProfileDto } from '../api/users';
 import { useUserStore } from '../store/userStore';
@@ -36,6 +37,8 @@ import { useDetoxStore } from '../store/detoxStore';
 import { useThemeStore } from '../store/themeStore';
 import { COLORS } from '../constants/colors';
 import { getRealVisibleBssids } from '../utils/wifi';
+import DiceBearAvatar from '../components/DiceBearAvatar';
+import { getPlaceImage } from '../utils/placeImages';
 
 // Helper to calculate distance in km/meters
 function getDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number): string {
@@ -91,6 +94,56 @@ function getCategoryIcon(category?: string, typeOrIsCommercial?: LocationType | 
   if (catLower.includes('памятник') || catLower.includes('historic') || catLower.includes('monument')) return "trail-sign";
   if (catLower.includes('мероприятие') || catLower.includes('event')) return "calendar";
   return isCommercial ? "cafe" : "leaf";
+}
+
+function formatPlaceDistance(distance?: string) {
+  return distance && distance.trim() ? distance : '';
+}
+
+function getPlaceContext(place: any) {
+  const tags = Array.isArray(place.tags) ? place.tags.filter(Boolean) : [];
+  const primaryTag = tags[0];
+
+  if (place.isPartner && (place.rewardDescription || place.reward || (place.rewardPolicies && place.rewardPolicies.length > 0))) {
+    return {
+      icon: 'pricetag-outline' as const,
+      tone: 'partner' as const,
+      title: place.rewardDescription ? 'Скидка доступна' : 'Партнёрское место',
+      subtitle: place.rewardDescription || place.reward?.text || primaryTag || '',
+    };
+  }
+
+  if (place.shortDescription || primaryTag) {
+    return {
+      icon: 'leaf-outline' as const,
+      tone: 'free' as const,
+      title: primaryTag || place.shortDescription,
+      subtitle: place.shortDescription && primaryTag ? place.shortDescription : '',
+    };
+  }
+
+  return null;
+}
+
+function openYandexMapsRoute(place: LocationDto) {
+  const coords = `${place.latitude},${place.longitude}`;
+  const appUrl = `yandexmaps://maps.yandex.ru/?rtext=~${coords}&rtt=pd`;
+  const webUrl = `https://yandex.ru/maps/?rtext=~${coords}&rtt=pd`;
+
+  Alert.alert('Открыть маршрут?', `Построить маршрут до "${place.name}" в Яндекс Картах?`, [
+    { text: 'Отмена', style: 'cancel' },
+    {
+      text: 'Открыть',
+      onPress: async () => {
+        try {
+          const canOpen = await Linking.canOpenURL(appUrl);
+          await Linking.openURL(canOpen ? appUrl : webUrl);
+        } catch {
+          await Linking.openURL(webUrl);
+        }
+      },
+    },
+  ]);
 }
 
 function getCategoryEmoji(category?: string, typeOrIsCommercial?: LocationType | boolean): string {
@@ -178,6 +231,121 @@ function cleanDescriptionText(desc?: string): string {
     .trim();
 }
 
+function PlaceDetailsCard({
+  place,
+  distance,
+  isUserClose,
+  isFavorite,
+  onToggleFavorite,
+  onPrimaryAction,
+  onInvite,
+}: {
+  place: LocationDto;
+  distance: string;
+  isUserClose: boolean;
+  isFavorite: boolean;
+  onToggleFavorite: () => void;
+  onPrimaryAction: () => void;
+  onInvite: () => void;
+}) {
+  const context = getPlaceContext(place);
+  const tags = Array.isArray(place.tags) ? place.tags.filter(Boolean).slice(0, 4) : [];
+  const category = toHumanReadableCategory(place.category, place.type);
+  const distanceText = formatPlaceDistance(distance);
+
+  return (
+    <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} contentContainerStyle={styles.placeSheetScroll}>
+      <View style={styles.placePhotoWrap}>
+        <Image source={getPlaceImage(place.name)} style={styles.placePhoto} resizeMode="cover" />
+        <View style={styles.placePhotoShade} />
+        {!!distanceText && (
+          <View style={styles.placeDistancePill}>
+            <Ionicons name="navigate" size={14} color="#FFFFFF" />
+            <Text style={styles.placeDistanceText}>{distanceText}</Text>
+          </View>
+        )}
+        <View style={styles.placePhotoActions}>
+          <TouchableOpacity style={styles.placeRoundButton} onPress={() => openYandexMapsRoute(place)}>
+            <Ionicons name="navigate-outline" size={19} color="#111827" />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.placeRoundButton} onPress={onToggleFavorite}>
+            <Ionicons name={isFavorite ? 'heart' : 'heart-outline'} size={20} color={isFavorite ? '#ef4444' : '#111827'} />
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      <View style={styles.placeInfoCard}>
+        <View style={styles.placeTitleBlock}>
+          <Text style={styles.placeTitle} numberOfLines={2}>{place.name}</Text>
+          <Text style={styles.placeMeta} numberOfLines={1}>
+            {category}{distanceText ? ` · ${distanceText}` : ''}
+          </Text>
+        </View>
+
+        {!!place.address && (
+          <View style={styles.placeInfoRow}>
+            <Ionicons name="location-outline" size={19} color="#10b981" />
+            <Text style={styles.placeInfoText} numberOfLines={2}>{place.address}</Text>
+          </View>
+        )}
+
+        {context && (
+          <View style={[styles.placeContextCard, context.tone === 'partner' && styles.placeContextCardPartner]}>
+            <View style={[styles.placeContextIcon, context.tone === 'partner' && styles.placeContextIconPartner]}>
+              <Ionicons name={context.icon} size={19} color={context.tone === 'partner' ? '#b7791f' : '#10b981'} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.placeContextTitle} numberOfLines={2}>{context.title}</Text>
+              {!!context.subtitle && <Text style={styles.placeContextSubtitle} numberOfLines={2}>{context.subtitle}</Text>}
+            </View>
+          </View>
+        )}
+
+        <View style={styles.placeActionsRow}>
+          <TouchableOpacity style={[styles.placePrimaryButton, !isUserClose && styles.placeRouteButton]} onPress={onPrimaryAction}>
+            <Ionicons name={isUserClose ? 'checkmark-circle-outline' : 'navigate-outline'} size={17} color="#FFFFFF" />
+            <Text style={styles.placePrimaryText}>{isUserClose ? 'Я здесь' : 'Маршрут'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.placeSecondaryButton} onPress={onInvite}>
+            <Ionicons name="people-outline" size={17} color="#64748b" />
+            <Text style={styles.placeSecondaryText}>Позвать</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.placeIconButton} onPress={() => Alert.alert('Поделиться', `Место: ${place.name}`)}>
+            <Ionicons name="share-social-outline" size={18} color="#64748b" />
+          </TouchableOpacity>
+        </View>
+
+        {!!place.description && (
+          <View style={styles.placeDetailsBlock}>
+            <Text style={styles.placeDetailsTitle}>О месте</Text>
+            <Text style={styles.placeDescription}>{cleanDescriptionText(place.description)}</Text>
+          </View>
+        )}
+
+        {!!tags.length && (
+          <View style={styles.placeTagsRow}>
+            {tags.map((tag, index) => (
+              <View key={`${tag}-${index}`} style={styles.placeTag}>
+                <Text style={styles.placeTagText}>{tag}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {place.isPartner && (
+          <View style={styles.placePartnerNote}>
+            <Ionicons name="pricetag-outline" size={18} color="#b7791f" />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.placePartnerTitle}>Партнёрское место</Text>
+              {!!place.rewardDescription && <Text style={styles.placePartnerSub}>{place.rewardDescription}</Text>}
+            </View>
+          </View>
+        )}
+      </View>
+    </ScrollView>
+  );
+}
+
 interface TypeFilterOption {
   type: 'ALL' | LocationType;
   label: string;
@@ -198,7 +366,7 @@ const TYPE_FILTER_OPTIONS: TypeFilterOption[] = [
   { type: 'BRIDGE', label: 'Мосты', emoji: '🌉' },
 ];
 
-export default function RadarScreen() {
+export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => void }) {
   const {
     locations,
     setLocations,
@@ -256,7 +424,19 @@ export default function RadarScreen() {
   const shownInviteIds = useRef<Set<string>>(new Set());
 
   // --- Redesigned Header States ---
-  const [myStatus, setMyStatus] = useState<'walking' | 'transit' | 'busy'>('busy');
+  const [myStatus, setMyStatus] = useState<'walking' | 'transit' | 'busy' | 'offline_soon'>('busy');
+  const getMyStatusColor = (status: string) => {
+    switch (status) {
+      case 'walking':
+        return '#10b981';
+      case 'transit':
+        return '#f59e0b';
+      case 'offline_soon':
+        return '#8B5CF6';
+      default:
+        return '#ef4444';
+    }
+  };
   const [isSearchActive, setIsSearchActive] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showFriendsListModal, setShowFriendsListModal] = useState(false);
@@ -305,13 +485,16 @@ export default function RadarScreen() {
   // Synchronize initial state based on profile.readyToAirOut
   useEffect(() => {
     if (profile) {
-      if (profile.readyToAirOut) {
+      const profileStatus = profile.status as 'walking' | 'transit' | 'busy' | 'offline_soon' | undefined;
+      if (profileStatus === 'walking' || profileStatus === 'transit' || profileStatus === 'busy' || profileStatus === 'offline_soon') {
+        setMyStatus(profileStatus);
+      } else if (profile.readyToAirOut) {
         setMyStatus(prev => (prev === 'transit' ? 'transit' : 'walking'));
       } else {
         setMyStatus('busy');
       }
     }
-  }, [profile?.readyToAirOut]);
+  }, [profile?.readyToAirOut, profile?.status]);
 
   // Pulse animation for avatar ring
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -1339,7 +1522,7 @@ export default function RadarScreen() {
               <Animated.View style={[
                 styles.pulseRing,
                 {
-                  borderColor: myStatus === 'walking' ? '#10b981' : '#f59e0b',
+                  borderColor: getMyStatusColor(myStatus),
                   transform: [{ scale: pulseAnim }],
                   opacity: pulseAnim.interpolate({
                     inputRange: [1, 1.15],
@@ -1352,21 +1535,13 @@ export default function RadarScreen() {
               style={[
                 styles.avatarRing,
                 {
-                  borderColor: myStatus === 'walking'
-                    ? '#10b981'
-                    : myStatus === 'transit'
-                    ? '#f59e0b'
-                    : '#7f1d1d',
+                  borderColor: getMyStatusColor(myStatus),
                   backgroundColor: activeThemeColors.card,
                 }
               ]}
-              onPress={() => setShowFriendsListModal(true)}
+              onPress={onOpenProfile || (() => setShowFriendsListModal(true))}
             >
-              <View style={[styles.avatarInner, { backgroundColor: '#7c3aed' }]}>
-                <Text style={styles.avatarInitials}>
-                  {profile?.username ? profile.username.substring(0, 2).toUpperCase() : 'ME'}
-                </Text>
-              </View>
+              <DiceBearAvatar seed={profile?.avatarSeed || profile?.username} size={34} />
             </TouchableOpacity>
           </View>
 
@@ -2080,16 +2255,26 @@ export default function RadarScreen() {
               )}
             </ScrollView>
           ) : selectedLocation ? (
+            <PlaceDetailsCard
+              place={selectedLocation}
+              distance={distanceStr}
+              isUserClose={isUserClose}
+              isFavorite={isFavorite}
+              onToggleFavorite={() => setIsFavorite(v => !v)}
+              onPrimaryAction={isUserClose ? handleStartDetox : () => openYandexMapsRoute(selectedLocation)}
+              onInvite={handleOpenInviteModal}
+            />
+          ) : selectedLocation! && false ? (
             // LOCATION DETAILS CARD (Gowalla style)
             <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24 }}>
               {/* Header section: Title and Subtitle and Action buttons */}
               <View style={styles.gowallaHeader}>
                 <View style={{ flex: 1, paddingRight: 8 }}>
                   <Text style={[styles.gowallaTitle, { color: activeThemeColors.text }]}>
-                    {selectedLocation.name}
+                    {selectedLocation!.name}
                   </Text>
                   <Text style={[styles.gowallaSubtitle, { color: activeThemeColors.textMuted }]}>
-                    {toHumanReadableCategory(selectedLocation.category, selectedLocation.type)}
+                    {toHumanReadableCategory(selectedLocation!.category, selectedLocation!.type)}
                     {distanceStr ? ` • ${distanceStr}` : ''}
                   </Text>
                 </View>
@@ -2152,31 +2337,31 @@ export default function RadarScreen() {
 
                 <TouchableOpacity 
                   style={[styles.gowallaWebButton, { backgroundColor: theme === 'light' ? '#f1f5f9' : '#1e293b', borderColor: activeThemeColors.border }]}
-                  onPress={() => Alert.alert('Поделиться', `Вы поделились местом: ${selectedLocation.name}`)}
+                  onPress={() => Alert.alert('Поделиться', `Вы поделились местом: ${selectedLocation!.name}`)}
                 >
                   <Ionicons name="share-social-outline" size={18} color={activeThemeColors.text} />
                 </TouchableOpacity>
               </View>
 
               {/* Description Section */}
-              {selectedLocation.description ? (
+              {selectedLocation!.description ? (
                 <View style={styles.gowallaDescriptionContainer}>
                   <View style={[styles.gowallaDivider, { backgroundColor: activeThemeColors.border }]} />
                   <Text style={[styles.gowallaDescriptionTitle, { color: activeThemeColors.text }]}>О месте</Text>
                   <Text style={[styles.gowallaDescription, { color: activeThemeColors.textMuted }]}>
-                    {cleanDescriptionText(selectedLocation.description)}
+                    {cleanDescriptionText(selectedLocation!.description)}
                   </Text>
                 </View>
               ) : null}
 
               {/* Reward Policies / Discounts Section for Commercial Locations */}
-              {selectedLocation.type === 'COMMERCIAL' && (
+              {selectedLocation!.type === 'COMMERCIAL' && (
                 <View style={{ marginTop: 12 }}>
                   <View style={[styles.gowallaDivider, { backgroundColor: activeThemeColors.border }]} />
                   <Text style={[styles.gowallaDescriptionTitle, { color: activeThemeColors.text, marginBottom: 8 }]}>🎁 Акции и Скидки заведения</Text>
                   
-                  {selectedLocation.rewardPolicies && selectedLocation.rewardPolicies.length > 0 ? (
-                    selectedLocation.rewardPolicies.map((policy, idx) => (
+                  {selectedLocation!.rewardPolicies && selectedLocation!.rewardPolicies!.length > 0 ? (
+                    selectedLocation!.rewardPolicies!.map((policy, idx) => (
                       <View key={idx} style={{ 
                         flexDirection: 'row', 
                         alignItems: 'center', 
@@ -2722,6 +2907,42 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: 40,
   },
+  placeSheetScroll: { paddingHorizontal: 12, paddingBottom: 18 },
+  placePhotoWrap: { height: 154, borderRadius: 24, overflow: 'hidden', backgroundColor: '#e5e7eb', marginBottom: -18 },
+  placePhoto: { width: '100%', height: '100%' },
+  placePhotoShade: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.08)' },
+  placeDistancePill: { position: 'absolute', left: 12, top: 12, minHeight: 30, borderRadius: 15, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(17,24,39,0.72)' },
+  placeDistanceText: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
+  placePhotoActions: { position: 'absolute', right: 10, top: 10, flexDirection: 'row', gap: 8 },
+  placeRoundButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.94)', alignItems: 'center', justifyContent: 'center' },
+  placeInfoCard: { borderRadius: 24, backgroundColor: '#FFFFFF', padding: 14, paddingTop: 16, gap: 12 },
+  placeTitleBlock: { gap: 3 },
+  placeTitle: { color: '#111827', fontSize: 21, fontWeight: '900', letterSpacing: -0.1 },
+  placeMeta: { color: '#64748b', fontSize: 13, fontWeight: '700' },
+  placeInfoRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  placeInfoText: { flex: 1, color: '#64748b', fontSize: 12, fontWeight: '700', lineHeight: 16 },
+  placeContextCard: { minHeight: 56, borderRadius: 17, backgroundColor: '#ecfdf5', padding: 10, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  placeContextCardPartner: { backgroundColor: '#fff7e6' },
+  placeContextIcon: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#d1fae5', alignItems: 'center', justifyContent: 'center' },
+  placeContextIconPartner: { backgroundColor: '#fdecc8' },
+  placeContextTitle: { color: '#1f2937', fontSize: 13, fontWeight: '900' },
+  placeContextSubtitle: { color: '#64748b', fontSize: 11, fontWeight: '600', lineHeight: 15, marginTop: 1 },
+  placeActionsRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  placePrimaryButton: { flex: 1.25, height: 44, borderRadius: 22, backgroundColor: '#10b981', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  placeRouteButton: { backgroundColor: '#111827' },
+  placePrimaryText: { color: '#FFFFFF', fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
+  placeSecondaryButton: { flex: 0.95, height: 44, borderRadius: 22, backgroundColor: '#f1f5f9', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5 },
+  placeSecondaryText: { color: '#64748b', fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
+  placeIconButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
+  placeDetailsBlock: { gap: 4 },
+  placeDetailsTitle: { color: '#111827', fontSize: 14, fontWeight: '900' },
+  placeDescription: { color: '#64748b', fontSize: 12, fontWeight: '600', lineHeight: 17 },
+  placeTagsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  placeTag: { borderRadius: 14, backgroundColor: '#f1f5f9', paddingHorizontal: 10, paddingVertical: 6 },
+  placeTagText: { color: '#64748b', fontSize: 11, fontWeight: '800' },
+  placePartnerNote: { borderRadius: 17, backgroundColor: '#fff7e6', padding: 10, flexDirection: 'row', alignItems: 'center', gap: 9 },
+  placePartnerTitle: { color: '#1f2937', fontSize: 13, fontWeight: '900' },
+  placePartnerSub: { color: '#64748b', fontSize: 11, fontWeight: '600', lineHeight: 15, marginTop: 1 },
   inviteOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',

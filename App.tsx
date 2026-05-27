@@ -1,21 +1,22 @@
 import React, { useEffect, useState } from 'react';
-import { View, ActivityIndicator, StyleSheet, TouchableOpacity, Text, Platform, AppState, AppStateStatus } from 'react-native';
+import { ActivityIndicator, AppState, AppStateStatus, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 import RadarScreen from './src/screens/RadarScreen';
 import LoginScreen from './src/screens/LoginScreen';
 import RegisterScreen from './src/screens/RegisterScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
+import UserProfileScreen from './src/screens/UserProfileScreen';
 import { useAuthStore } from './src/store/authStore';
 import { useDetoxStore } from './src/store/detoxStore';
 import { useUserStore } from './src/store/userStore';
 import { COLORS } from './src/constants/colors';
-
 import { useThemeStore } from './src/store/themeStore';
 
 export default function App() {
   const { token, isLoading, initialize } = useAuthStore();
   const [currentScreen, setCurrentScreen] = useState<'login' | 'register'>('login');
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
   const { activeTab, setActiveTab, sessionStatus, activeSessionId, pauseSession, resumeSession } = useDetoxStore();
   const { incomingRequests } = useUserStore();
   const { theme } = useThemeStore();
@@ -24,20 +25,17 @@ export default function App() {
     initialize();
   }, []);
 
-  // Listen to AppState transitions to automatically pause/resume detox sessions
   useEffect(() => {
     const handleAppStateChange = async (nextAppState: AppStateStatus) => {
       if (!activeSessionId) return;
 
       if (nextAppState === 'background' || nextAppState === 'inactive') {
-        console.log('App went to background, auto-pausing detox session...');
         try {
           await pauseSession();
         } catch (err) {
           console.error('Failed to auto-pause session:', err);
         }
       } else if (nextAppState === 'active') {
-        console.log('App came to foreground, auto-resuming detox session...');
         try {
           await resumeSession();
         } catch (err) {
@@ -47,10 +45,7 @@ export default function App() {
     };
 
     const subscription = AppState.addEventListener('change', handleAppStateChange);
-
-    return () => {
-      subscription.remove();
-    };
+    return () => subscription.remove();
   }, [activeSessionId, pauseSession, resumeSession]);
 
   const activeThemeColors = COLORS[theme];
@@ -75,86 +70,55 @@ export default function App() {
         )
       ) : (
         <View style={[styles.appContainer, { backgroundColor: activeThemeColors.background }]}>
-          {/* Active Screen rendering (persistent mounting) */}
           <View style={{ flex: 1, display: activeTab === 'map' ? 'flex' : 'none' }}>
-            <RadarScreen />
+            <RadarScreen onOpenProfile={() => setIsProfileOpen(true)} />
           </View>
           <View style={{ flex: 1, display: activeTab === 'social' ? 'flex' : 'none' }}>
             <ProfileScreen forceTab="social" />
           </View>
-          <View style={{ flex: 1, display: activeTab === 'profile' ? 'flex' : 'none' }}>
-            <ProfileScreen forceTab="profile" />
-          </View>
 
-          {/* Premium Floating Bottom Tab Bar */}
-          {!isSessionRunning && (
-            <View style={[
-              styles.tabBarContainer,
-              { 
-                backgroundColor: activeThemeColors.glass, 
-                borderColor: activeThemeColors.border,
-                shadowColor: activeThemeColors.shadow
-              }
-            ]}>
-              {/* Tab 1: Радар */}
-              <TouchableOpacity 
-                style={styles.tabButton} 
-                activeOpacity={0.7} 
-                onPress={() => setActiveTab('map')}
-              >
-                <Ionicons 
-                  name={activeTab === 'map' ? 'navigate' : 'navigate-outline'} 
-                  size={22} 
-                  color={activeTab === 'map' ? '#10b981' : '#94a3b8'} 
+          {isProfileOpen && (
+            <View style={styles.profileOverlay}>
+              <UserProfileScreen onClose={() => setIsProfileOpen(false)} />
+            </View>
+          )}
+
+          {!isSessionRunning && !isProfileOpen && (
+            <View
+              style={[
+                styles.tabBarContainer,
+                {
+                  backgroundColor: activeThemeColors.glass,
+                  borderColor: activeThemeColors.border,
+                  shadowColor: activeThemeColors.shadow,
+                },
+              ]}
+            >
+              <TouchableOpacity style={styles.tabButton} activeOpacity={0.7} onPress={() => setActiveTab('map')}>
+                <Ionicons
+                  name={activeTab === 'map' ? 'navigate' : 'navigate-outline'}
+                  size={22}
+                  color={activeTab === 'map' ? '#10b981' : '#94a3b8'}
                 />
-                <Text style={[
-                  styles.tabText, 
-                  { color: activeTab === 'map' ? '#10b981' : '#94a3b8' }
-                ]}>Радар</Text>
+                <Text style={[styles.tabText, { color: activeTab === 'map' ? '#10b981' : '#94a3b8' }]}>
+                  Карта
+                </Text>
               </TouchableOpacity>
 
-              {/* Tab 2: Социальный Хаб */}
-              <TouchableOpacity 
-                style={styles.tabButton} 
-                activeOpacity={0.7} 
-                onPress={() => setActiveTab('social')}
-              >
+              <TouchableOpacity style={styles.tabButton} activeOpacity={0.7} onPress={() => setActiveTab('social')}>
                 <View style={styles.profileIconWrapper}>
-                  <Ionicons 
-                    name={activeTab === 'social' ? 'people' : 'people-outline'} 
-                    size={22} 
-                    color={activeTab === 'social' ? '#10b981' : '#94a3b8'} 
+                  <Ionicons
+                    name={activeTab === 'social' ? 'people' : 'people-outline'}
+                    size={22}
+                    color={activeTab === 'social' ? '#10b981' : '#94a3b8'}
                   />
-                  {isSessionRunning && (
-                    <View style={[styles.badgeDot, { backgroundColor: '#10b981', borderColor: activeThemeColors.background }]} />
-                  )}
-                </View>
-                <Text style={[
-                  styles.tabText, 
-                  { color: activeTab === 'social' ? '#10b981' : '#94a3b8' }
-                ]}>Хаб</Text>
-              </TouchableOpacity>
-
-              {/* Tab 3: Мой Оазис */}
-              <TouchableOpacity 
-                style={styles.tabButton} 
-                activeOpacity={0.7} 
-                onPress={() => setActiveTab('profile')}
-              >
-                <View style={styles.profileIconWrapper}>
-                  <Ionicons 
-                    name={activeTab === 'profile' ? 'leaf' : 'leaf-outline'} 
-                    size={22} 
-                    color={activeTab === 'profile' ? '#10b981' : '#94a3b8'} 
-                  />
-                  {!isSessionRunning && hasPendingRequests && (
+                  {hasPendingRequests && (
                     <View style={[styles.badgeDot, { backgroundColor: '#ef4444', borderColor: activeThemeColors.background }]} />
                   )}
                 </View>
-                <Text style={[
-                  styles.tabText, 
-                  { color: activeTab === 'profile' ? '#10b981' : '#94a3b8' }
-                ]}>Оазис</Text>
+                <Text style={[styles.tabText, { color: activeTab === 'social' ? '#10b981' : '#94a3b8' }]}>
+                  Встречи
+                </Text>
               </TouchableOpacity>
             </View>
           )}
@@ -173,6 +137,16 @@ const styles = StyleSheet.create({
   appContainer: {
     flex: 1,
     backgroundColor: '#0b0f19',
+  },
+  profileOverlay: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 2000,
+    elevation: 20,
+    backgroundColor: '#F7F7F8',
   },
   tabBarContainer: {
     position: 'absolute',

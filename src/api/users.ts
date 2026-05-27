@@ -1,21 +1,57 @@
 import { API } from './locations';
 
 export interface UserProfileDto {
+  id: string;
+  displayName: string;
   username: string;
   email: string;
+  friendCode: string;
+  avatarSeed: string;
+  avatarUrl: string;
   socialRating: number;
   readyToAirOut: boolean;
   personalPlantXp: number;
   personalPlantStatus: string;
   status: string;
+  geoEnabled: boolean;
+  friendsCount: number;
+  offlineMinutesWeek: number;
+  lastWalkAt: string | null;
+  streakDays: number;
+  recentMeetings: ProfilePlaceDto[];
+  favoritePlaces: ProfilePlaceDto[];
+}
+
+export interface ProfilePlaceDto {
+  id: string;
+  name: string;
+  subtitle: string;
+  imageUrl: string | null;
+  category: string | null;
+  visits: number;
 }
 
 export interface FriendProfileDto {
+  displayName: string;
   username: string;
+  avatarSeed: string;
   socialRating: number;
   personalPlantStatus: string;
   readyToAirOut: boolean;
   status: string;
+}
+
+export interface UpdateUserProfileDto {
+  displayName?: string;
+  avatarSeed?: string;
+  geoEnabled?: boolean;
+}
+
+export interface FriendSearchResultDto {
+  id: string;
+  displayName: string;
+  username: string;
+  avatarSeed: string;
 }
 
 export interface RewardResponseDto {
@@ -31,6 +67,18 @@ export async function fetchUserProfile(): Promise<UserProfileDto> {
   return response.data;
 }
 
+export async function updateUserProfile(payload: UpdateUserProfileDto): Promise<UserProfileDto> {
+  const response = await API.patch('/users/me', payload);
+  return response.data;
+}
+
+export async function searchUserByFriendCode(friendCode: string): Promise<FriendSearchResultDto> {
+  const response = await API.get('/users/search', {
+    params: { friendCode: friendCode.trim().toUpperCase() },
+  });
+  return response.data;
+}
+
 export async function updateAirOutStatus(status: string): Promise<string> {
   const response = await API.post('/users/me/status', null, {
     params: { status },
@@ -40,6 +88,13 @@ export async function updateAirOutStatus(status: string): Promise<string> {
 
 export async function fetchFriendsList(): Promise<FriendProfileDto[]> {
   const response = await API.get('/friends/list');
+  return response.data;
+}
+
+export async function fetchFriendSuggestions(query?: string): Promise<FriendSearchResultDto[]> {
+  const response = await API.get('/friends/suggestions', {
+    params: query ? { query } : undefined,
+  });
   return response.data;
 }
 
