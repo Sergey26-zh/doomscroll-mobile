@@ -18,6 +18,8 @@ import {
   searchUserByFriendCode,
   FriendSearchResultDto,
   fetchFriendSuggestions,
+  uploadProfileAvatar,
+  removeProfileAvatar,
 } from '../api/users';
 
 interface UserState {
@@ -34,6 +36,8 @@ interface UserState {
 
   loadProfile: () => Promise<void>;
   updateProfile: (payload: UpdateUserProfileDto) => Promise<void>;
+  uploadAvatar: (uri: string, mimeType?: string, fileName?: string) => Promise<void>;
+  removeAvatar: () => Promise<void>;
   searchByFriendCode: (friendCode: string) => Promise<FriendSearchResultDto>;
   searchFriendSuggestions: (query?: string) => Promise<FriendSearchResultDto[]>;
   toggleWalkReady: (status: string) => Promise<void>;
@@ -80,6 +84,22 @@ export const useUserStore = create<UserState>((set, get) => ({
       set({ error: errMsg, isLoadingProfile: false });
       throw new Error(errMsg);
     }
+  },
+
+  uploadAvatar: async (uri, mimeType, fileName) => {
+    set({ isLoadingProfile: true, error: null });
+    try {
+      const profile = await uploadProfileAvatar(uri, mimeType, fileName);
+      set({ profile, isLoadingProfile: false });
+    } catch (e: any) {
+      set({ isLoadingProfile: false });
+      throw new Error(e.response?.data || e.message || 'Не удалось загрузить фото');
+    }
+  },
+
+  removeAvatar: async () => {
+    const profile = await removeProfileAvatar();
+    set({ profile });
   },
 
   searchByFriendCode: async (friendCode: string) => {

@@ -29,15 +29,14 @@ import { Ionicons } from '@expo/vector-icons';
 import BottomSheet, { BottomSheetView } from '@gorhom/bottom-sheet';
 
 import { LocationDto, LocationType } from '../types/location';
-import { fetchNearbyLocations } from '../api/locations';
-import { fetchFriendsLocations, FriendLocationDto, FriendProfileDto } from '../api/users';
+import { fetchNearbyLocations, setLocationFavorite } from '../api/locations';
+import { fetchFriendsLocations, FriendLocationDto, FriendProfileDto, resolveAvatarUrl } from '../api/users';
 import { useUserStore } from '../store/userStore';
 import { useLocationStore } from '../store/locationStore';
 import { useDetoxStore } from '../store/detoxStore';
 import { useThemeStore } from '../store/themeStore';
 import { COLORS } from '../constants/colors';
 import { getRealVisibleBssids } from '../utils/wifi';
-import DiceBearAvatar from '../components/DiceBearAvatar';
 import { getPlaceImage } from '../utils/placeImages';
 
 // Helper to calculate distance in km/meters
@@ -98,6 +97,10 @@ function getCategoryIcon(category?: string, typeOrIsCommercial?: LocationType | 
 
 function formatPlaceDistance(distance?: string) {
   return distance && distance.trim() ? distance : '';
+}
+
+function tidyPlaceText(value?: string | null) {
+  return (value || '').replace(/\s+/g, ' ').trim();
 }
 
 function getPlaceContext(place: any) {
@@ -265,9 +268,6 @@ function PlaceDetailsCard({
           </View>
         )}
         <View style={styles.placePhotoActions}>
-          <TouchableOpacity style={styles.placeRoundButton} onPress={() => openYandexMapsRoute(place)}>
-            <Ionicons name="navigate-outline" size={19} color="#111827" />
-          </TouchableOpacity>
           <TouchableOpacity style={styles.placeRoundButton} onPress={onToggleFavorite}>
             <Ionicons name={isFavorite ? 'heart' : 'heart-outline'} size={20} color={isFavorite ? '#ef4444' : '#111827'} />
           </TouchableOpacity>
@@ -276,7 +276,7 @@ function PlaceDetailsCard({
 
       <View style={styles.placeInfoCard}>
         <View style={styles.placeTitleBlock}>
-          <Text style={styles.placeTitle} numberOfLines={2}>{place.name}</Text>
+          <Text style={styles.placeTitle} numberOfLines={2}>{tidyPlaceText(place.name)}</Text>
           <Text style={styles.placeMeta} numberOfLines={1}>
             {category}{distanceText ? ` · ${distanceText}` : ''}
           </Text>
@@ -295,8 +295,8 @@ function PlaceDetailsCard({
               <Ionicons name={context.icon} size={19} color={context.tone === 'partner' ? '#b7791f' : '#10b981'} />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.placeContextTitle} numberOfLines={2}>{context.title}</Text>
-              {!!context.subtitle && <Text style={styles.placeContextSubtitle} numberOfLines={2}>{context.subtitle}</Text>}
+              <Text style={styles.placeContextTitle} numberOfLines={2}>{tidyPlaceText(context.title)}</Text>
+              {!!context.subtitle && <Text style={styles.placeContextSubtitle} numberOfLines={2}>{tidyPlaceText(context.subtitle)}</Text>}
             </View>
           </View>
         )}
@@ -318,7 +318,7 @@ function PlaceDetailsCard({
         {!!place.description && (
           <View style={styles.placeDetailsBlock}>
             <Text style={styles.placeDetailsTitle}>О месте</Text>
-            <Text style={styles.placeDescription}>{cleanDescriptionText(place.description)}</Text>
+            <Text style={styles.placeDescription}>{tidyPlaceText(cleanDescriptionText(place.description))}</Text>
           </View>
         )}
 
@@ -399,6 +399,7 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
   const { 
     friends, 
     loadFriends, 
+    loadProfile,
     profile, 
     toggleWalkReady, 
     sendRequest, 
@@ -799,13 +800,28 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
 
   useEffect(() => {
     loadMap();
+    loadProfile().catch(err => console.error(err));
   }, []);
 
   const [isFavorite, setIsFavorite] = useState(false);
 
+  const handleToggleFavorite = async () => {
+    if (!selectedLocation) return;
+    const next = !isFavorite;
+    setIsFavorite(next);
+    try {
+      const saved = await setLocationFavorite(selectedLocation.id, next);
+      setIsFavorite(saved);
+      loadProfile().catch(err => console.error(err));
+    } catch (e: any) {
+      setIsFavorite(!next);
+      Alert.alert('Не удалось обновить избранное', e?.response?.data || e?.message || 'Попробуйте еще раз');
+    }
+  };
+
   // Bi-directional synchronization: selectedLocation changes -> update Leaflet
   useEffect(() => {
-    setIsFavorite(false);
+    setIsFavorite(!!selectedLocation && !!profile?.favoritePlaces?.some(place => place.id === selectedLocation.id));
     if (selectedLocation) {
       setSelectedFriend(null);
       setShowQuickSpots(null);
@@ -821,7 +837,7 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
         bottomSheetRef.current?.close();
       }
     }
-  }, [selectedLocation]);
+  }, [selectedLocation, profile?.favoritePlaces]);
 
   // Handle selectedFriend change
   useEffect(() => {
@@ -1541,7 +1557,13 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
               ]}
               onPress={onOpenProfile || (() => setShowFriendsListModal(true))}
             >
-              <DiceBearAvatar seed={profile?.avatarSeed || profile?.username} size={34} />
+              {resolveAvatarUrl(profile?.avatarUrl) ? (
+                <Image source={{ uri: resolveAvatarUrl(profile?.avatarUrl)! }} style={{ width: 34, height: 34, borderRadius: 17 }} />
+              ) : (
+                <View style={[styles.avatarInner, { backgroundColor: activeThemeColors.border }]}>
+                  <Text style={[styles.avatarInitials, { color: activeThemeColors.primary }]}>{(profile?.displayName || profile?.username || '?').charAt(0).toUpperCase()}</Text>
+                </View>
+              )}
             </TouchableOpacity>
           </View>
 
@@ -2260,7 +2282,7 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
               distance={distanceStr}
               isUserClose={isUserClose}
               isFavorite={isFavorite}
-              onToggleFavorite={() => setIsFavorite(v => !v)}
+              onToggleFavorite={handleToggleFavorite}
               onPrimaryAction={isUserClose ? handleStartDetox : () => openYandexMapsRoute(selectedLocation)}
               onInvite={handleOpenInviteModal}
             />
@@ -2907,42 +2929,42 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: 40,
   },
-  placeSheetScroll: { paddingHorizontal: 12, paddingBottom: 18 },
-  placePhotoWrap: { height: 154, borderRadius: 24, overflow: 'hidden', backgroundColor: '#e5e7eb', marginBottom: -18 },
+  placeSheetScroll: { paddingHorizontal: 8, paddingBottom: 16 },
+  placePhotoWrap: { height: 146, borderRadius: 24, overflow: 'hidden', backgroundColor: '#e5e7eb', marginBottom: -16 },
   placePhoto: { width: '100%', height: '100%' },
   placePhotoShade: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.08)' },
   placeDistancePill: { position: 'absolute', left: 12, top: 12, minHeight: 30, borderRadius: 15, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(17,24,39,0.72)' },
   placeDistanceText: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
   placePhotoActions: { position: 'absolute', right: 10, top: 10, flexDirection: 'row', gap: 8 },
   placeRoundButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.94)', alignItems: 'center', justifyContent: 'center' },
-  placeInfoCard: { borderRadius: 24, backgroundColor: '#FFFFFF', padding: 14, paddingTop: 16, gap: 12 },
+  placeInfoCard: { borderRadius: 24, backgroundColor: '#FFFFFF', padding: 12, paddingTop: 15, gap: 11 },
   placeTitleBlock: { gap: 3 },
-  placeTitle: { color: '#111827', fontSize: 21, fontWeight: '900', letterSpacing: -0.1 },
-  placeMeta: { color: '#64748b', fontSize: 13, fontWeight: '700' },
+  placeTitle: { color: '#111827', fontSize: 19, fontWeight: '800', letterSpacing: 0, lineHeight: 23 },
+  placeMeta: { color: '#64748b', fontSize: 12, fontWeight: '600', lineHeight: 16 },
   placeInfoRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  placeInfoText: { flex: 1, color: '#64748b', fontSize: 12, fontWeight: '700', lineHeight: 16 },
-  placeContextCard: { minHeight: 56, borderRadius: 17, backgroundColor: '#ecfdf5', padding: 10, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  placeInfoText: { flex: 1, color: '#64748b', fontSize: 12, fontWeight: '500', lineHeight: 16 },
+  placeContextCard: { minHeight: 52, borderRadius: 17, backgroundColor: '#ecfdf5', padding: 9, flexDirection: 'row', alignItems: 'center', gap: 9 },
   placeContextCardPartner: { backgroundColor: '#fff7e6' },
   placeContextIcon: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#d1fae5', alignItems: 'center', justifyContent: 'center' },
   placeContextIconPartner: { backgroundColor: '#fdecc8' },
-  placeContextTitle: { color: '#1f2937', fontSize: 13, fontWeight: '900' },
-  placeContextSubtitle: { color: '#64748b', fontSize: 11, fontWeight: '600', lineHeight: 15, marginTop: 1 },
+  placeContextTitle: { color: '#1f2937', fontSize: 12, fontWeight: '700', lineHeight: 15 },
+  placeContextSubtitle: { color: '#64748b', fontSize: 11, fontWeight: '500', lineHeight: 15, marginTop: 1 },
   placeActionsRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  placePrimaryButton: { flex: 1.25, height: 44, borderRadius: 22, backgroundColor: '#10b981', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  placePrimaryButton: { flex: 1.16, height: 42, borderRadius: 21, backgroundColor: '#10b981', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 12 },
   placeRouteButton: { backgroundColor: '#111827' },
-  placePrimaryText: { color: '#FFFFFF', fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
-  placeSecondaryButton: { flex: 0.95, height: 44, borderRadius: 22, backgroundColor: '#f1f5f9', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5 },
-  placeSecondaryText: { color: '#64748b', fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
-  placeIconButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
+  placePrimaryText: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
+  placeSecondaryButton: { flex: 0.95, height: 42, borderRadius: 21, backgroundColor: '#f1f5f9', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingHorizontal: 12 },
+  placeSecondaryText: { color: '#64748b', fontSize: 12, fontWeight: '700' },
+  placeIconButton: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
   placeDetailsBlock: { gap: 4 },
-  placeDetailsTitle: { color: '#111827', fontSize: 14, fontWeight: '900' },
-  placeDescription: { color: '#64748b', fontSize: 12, fontWeight: '600', lineHeight: 17 },
+  placeDetailsTitle: { color: '#111827', fontSize: 13, fontWeight: '800', lineHeight: 17 },
+  placeDescription: { color: '#64748b', fontSize: 12, fontWeight: '500', lineHeight: 17 },
   placeTagsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
   placeTag: { borderRadius: 14, backgroundColor: '#f1f5f9', paddingHorizontal: 10, paddingVertical: 6 },
-  placeTagText: { color: '#64748b', fontSize: 11, fontWeight: '800' },
+  placeTagText: { color: '#64748b', fontSize: 11, fontWeight: '600' },
   placePartnerNote: { borderRadius: 17, backgroundColor: '#fff7e6', padding: 10, flexDirection: 'row', alignItems: 'center', gap: 9 },
-  placePartnerTitle: { color: '#1f2937', fontSize: 13, fontWeight: '900' },
-  placePartnerSub: { color: '#64748b', fontSize: 11, fontWeight: '600', lineHeight: 15, marginTop: 1 },
+  placePartnerTitle: { color: '#1f2937', fontSize: 12, fontWeight: '700', lineHeight: 15 },
+  placePartnerSub: { color: '#64748b', fontSize: 11, fontWeight: '500', lineHeight: 15, marginTop: 1 },
   inviteOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',

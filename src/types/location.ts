@@ -68,4 +68,6 @@ export interface LocationDto {
   isPopular?: boolean;
 
   rewardPolicies?: RewardPolicyDto[];
+
+  favorite?: boolean;
 }

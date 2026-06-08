@@ -1,4 +1,4 @@
-import { API } from './locations';
+import { API, API_BASE_URL } from './locations';
 
 export interface UserProfileDto {
   id: string;
@@ -7,7 +7,7 @@ export interface UserProfileDto {
   email: string;
   friendCode: string;
   avatarSeed: string;
-  avatarUrl: string;
+  avatarUrl: string | null;
   socialRating: number;
   readyToAirOut: boolean;
   personalPlantXp: number;
@@ -20,6 +20,7 @@ export interface UserProfileDto {
   streakDays: number;
   recentMeetings: ProfilePlaceDto[];
   favoritePlaces: ProfilePlaceDto[];
+  frequentPlaces: ProfilePlaceDto[];
 }
 
 export interface ProfilePlaceDto {
@@ -39,6 +40,7 @@ export interface FriendProfileDto {
   personalPlantStatus: string;
   readyToAirOut: boolean;
   status: string;
+  avatarUrl: string | null;
 }
 
 export interface UpdateUserProfileDto {
@@ -52,6 +54,7 @@ export interface FriendSearchResultDto {
   displayName: string;
   username: string;
   avatarSeed: string;
+  avatarUrl: string | null;
 }
 
 export interface RewardResponseDto {
@@ -69,6 +72,29 @@ export async function fetchUserProfile(): Promise<UserProfileDto> {
 
 export async function updateUserProfile(payload: UpdateUserProfileDto): Promise<UserProfileDto> {
   const response = await API.patch('/users/me', payload);
+  return response.data;
+}
+
+export function resolveAvatarUrl(avatarUrl?: string | null) {
+  if (!avatarUrl) return null;
+  if (/^https?:\/\//i.test(avatarUrl)) return avatarUrl;
+  if (avatarUrl.startsWith('/api/')) {
+    return `${API_BASE_URL.replace(/\/api$/, '')}${avatarUrl}`;
+  }
+  return `${API_BASE_URL}${avatarUrl.startsWith('/') ? avatarUrl : `/${avatarUrl}`}`;
+}
+
+export async function uploadProfileAvatar(uri: string, mimeType = 'image/jpeg', fileName = 'avatar.jpg'): Promise<UserProfileDto> {
+  const form = new FormData();
+  form.append('file', { uri, type: mimeType, name: fileName } as any);
+  const response = await API.post('/users/me/avatar', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return response.data;
+}
+
+export async function removeProfileAvatar(): Promise<UserProfileDto> {
+  const response = await API.delete('/users/me/avatar');
   return response.data;
 }
 

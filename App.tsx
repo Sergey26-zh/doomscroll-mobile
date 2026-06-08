@@ -26,6 +26,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!token) setIsProfileOpen(false);
+  }, [token]);
+
+  useEffect(() => {
     const handleAppStateChange = async (nextAppState: AppStateStatus) => {
       if (!activeSessionId) return;
 
@@ -55,7 +59,7 @@ export default function App() {
   if (isLoading) {
     return (
       <View style={[styles.loadingContainer, { backgroundColor: activeThemeColors.background }]}>
-        <ActivityIndicator size="large" color="#10b981" />
+        <ActivityIndicator size="large" color={activeThemeColors.primary} />
       </View>
     );
   }
@@ -78,7 +82,7 @@ export default function App() {
           </View>
 
           {isProfileOpen && (
-            <View style={styles.profileOverlay}>
+            <View style={[styles.profileOverlay, { backgroundColor: activeThemeColors.background }]}>
               <UserProfileScreen onClose={() => setIsProfileOpen(false)} />
             </View>
           )}
@@ -98,9 +102,9 @@ export default function App() {
                 <Ionicons
                   name={activeTab === 'map' ? 'navigate' : 'navigate-outline'}
                   size={22}
-                  color={activeTab === 'map' ? '#10b981' : '#94a3b8'}
+                  color={activeTab === 'map' ? activeThemeColors.primary : activeThemeColors.textMuted}
                 />
-                <Text style={[styles.tabText, { color: activeTab === 'map' ? '#10b981' : '#94a3b8' }]}>
+                <Text style={[styles.tabText, { color: activeTab === 'map' ? activeThemeColors.primary : activeThemeColors.textMuted }]}>
                   Карта
                 </Text>
               </TouchableOpacity>
@@ -110,13 +114,13 @@ export default function App() {
                   <Ionicons
                     name={activeTab === 'social' ? 'people' : 'people-outline'}
                     size={22}
-                    color={activeTab === 'social' ? '#10b981' : '#94a3b8'}
+                    color={activeTab === 'social' ? activeThemeColors.primary : activeThemeColors.textMuted}
                   />
                   {hasPendingRequests && (
                     <View style={[styles.badgeDot, { backgroundColor: '#ef4444', borderColor: activeThemeColors.background }]} />
                   )}
                 </View>
-                <Text style={[styles.tabText, { color: activeTab === 'social' ? '#10b981' : '#94a3b8' }]}>
+                <Text style={[styles.tabText, { color: activeTab === 'social' ? activeThemeColors.primary : activeThemeColors.textMuted }]}>
                   Встречи
                 </Text>
               </TouchableOpacity>
