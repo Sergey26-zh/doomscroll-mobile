@@ -39,7 +39,8 @@ API.interceptors.response.use(
 export async function fetchNearbyLocations(
   lat: number,
   lon: number,
-  popularOnly?: boolean
+  popularOnly?: boolean,
+  types?: string[]
 ): Promise<LocationDto[]> {
   const response = await API.get('/locations/nearby', {
     params: {
@@ -47,6 +48,10 @@ export async function fetchNearbyLocations(
       lon,
       radius: 300000,
       popularOnly,
+      types,
+    },
+    paramsSerializer: {
+      indexes: null,
     },
   });
 

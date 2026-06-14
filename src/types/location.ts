@@ -10,7 +10,12 @@ export type LocationType =
   | 'BRIDGE'
   | 'MONUMENT'
   | 'SIGHT'
-  | 'EVENT';
+  | 'EVENT'
+  | 'PARTNER_CAFE'
+  | 'FREE_PLACE'
+  | 'PUBLIC_SPACE'
+  | 'WORKOUT'
+  | 'COWORKING';
 
 export interface RewardPolicyDto {
   requiredMinutes: number;
@@ -68,6 +73,16 @@ export interface LocationDto {
   isPopular?: boolean;
 
   rewardPolicies?: RewardPolicyDto[];
+
+  qualityScore?: number;
+
+  source?: string;
+
+  wikidataId?: string;
+
+  wikipediaUrl?: string;
+
+  lastSyncedAt?: string;
 
   favorite?: boolean;
 }

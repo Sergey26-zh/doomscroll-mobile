@@ -39,6 +39,11 @@ import { COLORS } from '../constants/colors';
 import { getRealVisibleBssids } from '../utils/wifi';
 import { getPlaceImage } from '../utils/placeImages';
 
+const SPB_CENTER = {
+  latitude: 59.9391,
+  longitude: 30.3158,
+};
+
 // Helper to calculate distance in km/meters
 function getDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number): string {
   const R = 6371; // Earth radius in km
@@ -234,6 +239,41 @@ function cleanDescriptionText(desc?: string): string {
     .trim();
 }
 
+function getLocationPhotoSource(place: LocationDto) {
+  const remoteUrl = place.photoUrl || place.coverImageUrl;
+  return remoteUrl ? { uri: remoteUrl } : getPlaceImage(place.name);
+}
+
+function matchesTypeFilter(location: LocationDto, selectedTypeFilter: LocationType | 'ALL' | 'FRIENDS') {
+  if (selectedTypeFilter === 'ALL' || selectedTypeFilter === 'FRIENDS') {
+    return true;
+  }
+  if (location.type === selectedTypeFilter) {
+    return true;
+  }
+  if (selectedTypeFilter === 'SPACE') {
+    return location.type === 'PUBLIC_SPACE' || location.type === 'FREE_PLACE' || location.type === 'SOCIAL';
+  }
+  if (selectedTypeFilter === 'COMMERCIAL') {
+    return location.type === 'PARTNER_CAFE';
+  }
+  return false;
+}
+
+async function fetchNearbyLocationsWithSpbFallback(
+  latitude: number,
+  longitude: number,
+  popularOnly?: boolean
+): Promise<{ locations: LocationDto[]; usedFallback: boolean }> {
+  const nearby = await fetchNearbyLocations(latitude, longitude, popularOnly);
+  if (nearby.length > 0) {
+    return { locations: nearby, usedFallback: false };
+  }
+
+  const spbLocations = await fetchNearbyLocations(SPB_CENTER.latitude, SPB_CENTER.longitude, popularOnly);
+  return { locations: spbLocations, usedFallback: spbLocations.length > 0 };
+}
+
 function PlaceDetailsCard({
   place,
   distance,
@@ -259,7 +299,7 @@ function PlaceDetailsCard({
   return (
     <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} contentContainerStyle={styles.placeSheetScroll}>
       <View style={styles.placePhotoWrap}>
-        <Image source={getPlaceImage(place.name)} style={styles.placePhoto} resizeMode="cover" />
+        <Image source={getLocationPhotoSource(place)} style={styles.placePhoto} resizeMode="cover" />
         <View style={styles.placePhotoShade} />
         {!!distanceText && (
           <View style={styles.placeDistancePill}>
@@ -666,17 +706,14 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
           }
           return {
             ...fLoc,
-            status: statusStr
+            status: statusStr,
+            avatarUrl: resolveAvatarUrl(matchingFriend?.avatarUrl),
+            displayName: matchingFriend?.displayName || matchingFriend?.username || fLoc.username,
           };
         });
 
-        if (selectedTypeFilter === 'FRIENDS') {
-          const jsPayload = `if (window.setFriendsLocations) { window.setFriendsLocations(${JSON.stringify(mergedFriends)}); } void(0);`;
-          webViewRef.current?.injectJavaScript(jsPayload);
-        } else {
-          const jsPayload = `if (window.setFriendsLocations) { window.setFriendsLocations([]); } void(0);`;
-          webViewRef.current?.injectJavaScript(jsPayload);
-        }
+        const jsPayload = `if (window.setFriendsLocations) { window.setFriendsLocations(${JSON.stringify(mergedFriends)}); } void(0);`;
+        webViewRef.current?.injectJavaScript(jsPayload);
       } catch (err) {
         console.error("Error loading friends locations:", err);
       }
@@ -747,8 +784,13 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
 
     const loadFilteredLocations = async () => {
       try {
-        const fetched = await fetchNearbyLocations(userCoords.latitude, userCoords.longitude, filterPopular);
-        setLocations(fetched);
+        const result = await fetchNearbyLocationsWithSpbFallback(userCoords.latitude, userCoords.longitude, filterPopular);
+        setLocations(result.locations);
+        if (result.usedFallback) {
+          webViewRef.current?.injectJavaScript(
+            `if (map) { map.setView([${SPB_CENTER.latitude}, ${SPB_CENTER.longitude}], 12, { animate: true, duration: 0.8 }); } void(0);`
+          );
+        }
       } catch (err) {
         console.error("Error fetching filtered locations:", err);
       }
@@ -788,7 +830,7 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
         });
       });
     }
-    return locations.filter(loc => loc.type === selectedTypeFilter);
+    return locations.filter(loc => matchesTypeFilter(loc, selectedTypeFilter));
   }, [locations, selectedTypeFilter, friendsLocations]);
 
   // Synchronize Leaflet map when locations list filters change
@@ -892,7 +934,10 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
       const longitude = current.coords.longitude;
       setUserCoords({ latitude, longitude });
 
-      const fetchedLocations = await fetchNearbyLocations(latitude, longitude);
+      const locationResult = await fetchNearbyLocationsWithSpbFallback(latitude, longitude);
+      const fetchedLocations = locationResult.locations;
+      const mapLatitude = locationResult.usedFallback ? SPB_CENTER.latitude : latitude;
+      const mapLongitude = locationResult.usedFallback ? SPB_CENTER.longitude : longitude;
       setLocations(fetchedLocations);
 
       const locationsJson = JSON.stringify(fetchedLocations);
@@ -938,6 +983,12 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
               display: flex;
               align-items: center;
               justify-content: center;
+              overflow: hidden;
+            }
+            .friend-avatar img {
+              width: 100%;
+              height: 100%;
+              object-fit: cover;
             }
             .user-dot-wrapper {
               position: relative;
@@ -947,20 +998,20 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
               width: 24px;
               height: 24px;
             }
-             .user-dot {
+            .user-dot {
               width: 12px;
               height: 12px;
-              background: #10b981;
-              border: 2px solid #1a1d24;
+              background: #355f52;
+              border: 2px solid #ffffff;
               border-radius: 50%;
-              box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
+              box-shadow: 0 8px 18px rgba(53, 95, 82, 0.26);
               z-index: 2;
             }
             .user-pulse {
               position: absolute;
               width: 24px;
               height: 24px;
-              background: rgba(16, 185, 129, 0.35);
+              background: rgba(53, 95, 82, 0.24);
               border-radius: 50%;
               animation: pulse 2s infinite ease-out;
               z-index: 1;
@@ -976,55 +1027,100 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
               flex-direction: column;
               align-items: center;
               justify-content: center;
-              filter: drop-shadow(0 4px 6px rgba(26, 29, 36, 0.15));
+              filter: drop-shadow(0 5px 10px rgba(17, 24, 39, 0.16));
+              transition: transform 0.18s ease;
             }
             .pin-container {
               display: flex;
-              flex-direction: column;
               align-items: center;
+              justify-content: center;
               position: relative;
             }
             .pin-bubble {
-              width: 36px;
-              height: 36px;
-              border: 2.5px solid #1a1d24;
-              border-radius: 10px;
+              width: 32px;
+              height: 32px;
+              border: 2px solid rgba(255,255,255,0.94);
+              border-radius: 16px;
               display: flex;
               align-items: center;
               justify-content: center;
-              transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+              transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.2s ease;
               z-index: 2;
+              box-shadow: 0 2px 6px rgba(17, 24, 39, 0.12);
             }
             .pin-pointer {
-              width: 10px;
-              height: 10px;
-              border-right: 2.5px solid #1a1d24;
-              border-bottom: 2.5px solid #1a1d24;
-              transform: rotate(45deg);
-              margin-top: -6.5px;
-              z-index: 1;
+              display: none;
             }
-            .pin-commercial .pin-bubble, .pin-commercial .pin-pointer {
-              background: #f59e0b !important;
+            .pin-partner .pin-bubble {
+              width: 36px;
+              height: 36px;
+              border-radius: 18px;
+              background: #1f2a25 !important;
+              box-shadow: 0 8px 18px rgba(31, 42, 37, 0.25);
             }
-            .pin-social .pin-bubble, .pin-social .pin-pointer {
-              background: #10b981 !important;
+            .pin-free .pin-bubble {
+              width: 30px;
+              height: 30px;
+              border-radius: 15px;
             }
-            .pin-event .pin-bubble, .pin-event .pin-pointer {
-              background: #8b5cf6 !important;
+            .pin-free-high .pin-bubble {
+              width: 34px;
+              height: 34px;
+              border-radius: 17px;
+              box-shadow: 0 7px 16px rgba(17, 24, 39, 0.2);
+            }
+            .pin-event .pin-bubble {
+              width: 36px;
+              height: 36px;
+              border-radius: 18px;
+              background: #7c5cff !important;
+              box-shadow: 0 9px 20px rgba(124, 92, 255, 0.3);
+            }
+            .pin-meeting .pin-bubble {
+              width: 38px;
+              height: 38px;
+              border-radius: 19px;
+              background: #e85d5d !important;
+              box-shadow: 0 10px 22px rgba(232, 93, 93, 0.32);
+            }
+            .pin-green .pin-bubble { background: #5f8d6a !important; }
+            .pin-water .pin-bubble { background: #4f8fa3 !important; }
+            .pin-urban .pin-bubble { background: #8a7a63 !important; }
+            .pin-culture .pin-bubble { background: #6d6478 !important; }
+            .dark-theme-map .pin-green .pin-bubble { background: #5b9a80 !important; }
+            .dark-theme-map .pin-water .pin-bubble { background: #5ba3b5 !important; }
+            .dark-theme-map .pin-urban .pin-bubble { background: #a38e73 !important; }
+            .dark-theme-map .pin-culture .pin-bubble { background: #8d7fa3 !important; }
+            .dark-theme-map .pin-partner .pin-bubble { background: #d9e8df !important; }
+            .dark-theme-map .pin-event .pin-bubble { background: #9b82ff !important; }
+            .dark-theme-map .pin-meeting .pin-bubble { background: #f87171 !important; }
+            .dark-theme-map .pin-partner svg { stroke: #1f2a25; }
             }
             .pin-icon {
-              font-size: 18px;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+            }
+            .pin-free svg {
+              width: 16px;
+              height: 16px;
+            }
+            .pin-partner svg,
+            .pin-event svg,
+            .pin-meeting svg {
+              width: 17px;
+              height: 17px;
+            }
+            .zoom-street .pin-free .pin-bubble {
+              width: 34px;
+              height: 34px;
+              border-radius: 17px;
             }
             .custom-marker-pin.active .pin-bubble {
-              transform: scale(1.15) translateY(-2px);
+              transform: scale(1.35) translateY(-2px);
               border-color: #ffffff !important;
-              box-shadow: 0 0 12px rgba(255, 255, 255, 0.8) !important;
+              box-shadow: 0 12px 28px rgba(17, 24, 39, 0.3) !important;
               z-index: 1000 !important;
-            }
-            .custom-marker-pin.active .pin-pointer {
-              border-right-color: #ffffff !important;
-              border-bottom-color: #ffffff !important;
             }
             
             /* Friend Pins */
@@ -1039,28 +1135,28 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
               flex-direction: column;
               align-items: center;
               position: relative;
-              filter: drop-shadow(0 4px 6px rgba(26, 29, 36, 0.15));
+              filter: drop-shadow(0 10px 22px rgba(17, 24, 39, 0.2));
             }
             .friend-avatar-wrapper {
               position: relative;
-              width: 36px;
-              height: 36px;
+              width: 46px;
+              height: 46px;
               border-radius: 50%;
               background: #ffffff;
-              border: 2.5px solid #1a1d24;
+              border: 2px solid rgba(255,255,255,0.92);
               display: flex;
               align-items: center;
               justify-content: center;
               z-index: 2;
             }
             .friend-avatar {
-              width: 30px;
-              height: 30px;
+              width: 38px;
+              height: 38px;
               border-radius: 50%;
-              background: linear-gradient(135deg, #a78bfa 0%, #7c3aed 100%);
+              background: linear-gradient(135deg, #53616f 0%, #1f2937 100%);
               color: white;
               font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-              font-size: 11px;
+              font-size: 12px;
               font-weight: 800;
               display: flex;
               align-items: center;
@@ -1068,11 +1164,11 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
             }
             .friend-avatar-glow {
               position: absolute;
-              width: 42px;
-              height: 42px;
+              width: 54px;
+              height: 54px;
               border-radius: 50%;
-              background: rgba(124, 58, 237, 0.25);
-              animation: friendPulse 2.5s infinite ease-out;
+              background: rgba(53, 95, 82, 0.12);
+              animation: friendPulse 3s infinite ease-out;
               z-index: 1;
               pointer-events: none;
             }
@@ -1082,12 +1178,12 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
             }
             .friend-status-dot {
               position: absolute;
-              bottom: -2px;
-              right: -2px;
-              width: 10px;
-              height: 10px;
+              bottom: 1px;
+              right: 1px;
+              width: 11px;
+              height: 11px;
               border-radius: 50%;
-              border: 1.5px solid #1a1d24;
+              border: 2px solid #ffffff;
               z-index: 3;
             }
             .friend-container.status-walking .friend-status-dot {
@@ -1100,27 +1196,20 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
               background: #ef4444;
             }
             .friend-pointer {
-              width: 10px;
-              height: 10px;
-              background: #ffffff;
-              border-right: 2.5px solid #1a1d24;
-              border-bottom: 2.5px solid #1a1d24;
-              transform: rotate(45deg);
-              margin-top: -6px;
-              z-index: 1;
+              display: none;
             }
             .friend-name-tag {
-              background: #1a1d24;
-              color: white;
+              background: rgba(255,255,255,0.92);
+              color: #111827;
               font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-              font-size: 9px;
-              font-weight: 800;
-              padding: 2px 6px;
-              border-radius: 6px;
-              margin-top: 4px;
+              font-size: 10px;
+              font-weight: 700;
+              padding: 3px 7px;
+              border-radius: 999px;
+              margin-top: 6px;
               white-space: nowrap;
-              border: 1px solid rgba(255,255,255,0.15);
-              box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+              border: 1px solid rgba(17,24,39,0.06);
+              box-shadow: 0 6px 16px rgba(17,24,39,0.12);
               pointer-events: none;
             }
             
@@ -1131,23 +1220,23 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
             .custom-marker-cluster div {
               text-align: center;
               border-radius: 50%;
-              font-weight: 800;
-              font-size: 13px;
+              font-weight: 700;
+              font-size: 12px;
               display: flex;
               align-items: center;
               justify-content: center;
-              border: 2.5px solid #1a1d24 !important;
-              width: 32px;
-              height: 32px;
-              box-shadow: 0 4px 8px rgba(26, 29, 36, 0.15);
+              border: 1px solid #d1d5db !important;
+              width: 34px;
+              height: 34px;
+              box-shadow: 0 10px 24px rgba(17, 24, 39, 0.14);
             }
             .light-theme-map .custom-marker-cluster div {
               background-color: #ffffff !important;
-              color: #1a1d24 !important;
+              color: #111827 !important;
             }
             .dark-theme-map .custom-marker-cluster div {
-              background-color: #222f47 !important;
-              color: #ffffff !important;
+              background-color: rgba(28,37,47,0.92) !important;
+              color: #d7efe2 !important;
             }
           </style>
         </head>
@@ -1160,13 +1249,14 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
             let currentTileLayer;
             let markersGroup;
             const markersMap = {};
+            const markerMeta = {};
             const friendsMarkers = {};
             let activeMarkerId = null;
             
             map = L.map('map', {
               zoomControl: false,
               attributionControl: false
-            }).setView([${latitude}, ${longitude}], 12);
+            }).setView([${mapLatitude}, ${mapLongitude}], 12);
             
             window.setMapTheme = function(themeName) {
               if (currentTileLayer) {
@@ -1189,6 +1279,19 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
             };
             
             setMapTheme('${theme}');
+
+            function updateZoomHierarchy() {
+              const container = document.getElementById('map');
+              if (!container) return;
+              const zoom = map.getZoom();
+              container.classList.toggle('zoom-city', zoom <= 12);
+              container.classList.toggle('zoom-district', zoom >= 13 && zoom <= 14);
+              container.classList.toggle('zoom-near', zoom >= 15 && zoom <= 16);
+              container.classList.toggle('zoom-street', zoom >= 17);
+              refreshVisibleLocations();
+            }
+            updateZoomHierarchy();
+            map.on('zoomend', updateZoomHierarchy);
             
             // User marker
             const userIcon = L.divIcon({
@@ -1215,24 +1318,28 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
             });
             map.addLayer(markersGroup);
             
-            function getSvgIcon(type, category, isCommercial) {
+            function getSvgIcon(type, category, isCommercial, markerClass) {
               const strokeColor = 'white';
-              const cafeSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="' + strokeColor + '" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 8h1a4 4 0 1 1 0 8h-1"></path><path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4Z"></path><line x1="6" y1="2" x2="6" y2="4"></line><line x1="10" y1="2" x2="10" y2="4"></line><line x1="14" y1="2" x2="14" y2="4"></line></svg>';
-              const parkSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="' + strokeColor + '" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 3.5 1 8.5C18 15 15 18 11 20z"></path><path d="M19 2c-2.26 4.33-5.27 7.14-8 10"></path></svg>';
-              const viewSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="' + strokeColor + '" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
-              const monSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="' + strokeColor + '" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="2" y1="22" x2="22" y2="22"></line><line x1="4" y1="22" x2="4" y2="8"></line><line x1="20" y1="22" x2="20" y2="8"></line><line x1="8" y1="22" x2="8" y2="8"></line><line x1="16" y1="22" x2="16" y2="8"></line><line x1="12" y1="22" x2="12" y2="8"></line><path d="M12 2v6"></path><path d="M4 8h16"></path></svg>';
-              const eventSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="' + strokeColor + '" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>';
-              const spaceSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="' + strokeColor + '" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="m16.2 7.8-2 5.6-5.6 2 2-5.6 5.6-2z"></path></svg>'; // Compass
-              const waterSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="' + strokeColor + '" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6c.6.5 1.2 1 2.5 1C5.8 7 7 5 9.5 5c2.5 0 3.7 2 5 2 1.3 0 2.5-.5 3-1M2 12c.6.5 1.2 1 2.5 1 1.3 0 2.5-2 5-2 2.5 0 3.7 2 5 2 1.3 0 2.5-.5 3-1M2 18c.6.5 1.2 1 2.5 1 1.3 0 2.5-2 5-2 2.5 0 3.7 2 5 2 1.3 0 2.5-.5 3-1"></path></svg>'; // Waves
-              const squareSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="' + strokeColor + '" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M9 3v18M15 3v18M3 9h18M3 15h18"></path></svg>'; // Grid
-              const streetSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="' + strokeColor + '" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22V2M20 22V2M12 2v2M12 8v4M12 16v4"></path></svg>'; // Road
-              const courtyardSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="' + strokeColor + '" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>'; // Home
-              const bridgeSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="' + strokeColor + '" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20c3-3 6-5 9-5s6 2 9 5M3 12h18M12 12v3M6 12v1.5M18 12v1.5"></path></svg>'; // Bridge
+              const cafeSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="' + strokeColor + '" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M17 8h1a4 4 0 1 1 0 8h-1"></path><path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4Z"></path><line x1="6" y1="2" x2="6" y2="4"></line><line x1="10" y1="2" x2="10" y2="4"></line><line x1="14" y1="2" x2="14" y2="4"></line></svg>';
+              const parkSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="' + strokeColor + '" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 3.5 1 8.5C18 15 15 18 11 20z"></path><path d="M19 2c-2.26 4.33-5.27 7.14-8 10"></path></svg>';
+              const viewSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="' + strokeColor + '" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
+              const monSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="' + strokeColor + '" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><line x1="2" y1="22" x2="22" y2="22"></line><line x1="4" y1="22" x2="4" y2="8"></line><line x1="20" y1="22" x2="20" y2="8"></line><line x1="8" y1="22" x2="8" y2="8"></line><line x1="16" y1="22" x2="16" y2="8"></line><line x1="12" y1="22" x2="12" y2="8"></line><path d="M12 2v6"></path><path d="M4 8h16"></path></svg>';
+              const eventSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="' + strokeColor + '" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>';
+              const spaceSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="' + strokeColor + '" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="m16.2 7.8-2 5.6-5.6 2 2-5.6 5.6-2z"></path></svg>';
+              const waterSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="' + strokeColor + '" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6c.6.5 1.2 1 2.5 1C5.8 7 7 5 9.5 5c2.5 0 3.7 2 5 2 1.3 0 2.5-.5 3-1M2 12c.6.5 1.2 1 2.5 1 1.3 0 2.5-2 5-2 2.5 0 3.7 2 5 2 1.3 0 2.5-.5 3-1M2 18c.6.5 1.2 1 2.5 1 1.3 0 2.5-2 5-2 2.5 0 3.7 2 5 2 1.3 0 2.5-.5 3-1"></path></svg>';
+              const squareSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="' + strokeColor + '" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M9 3v18M15 3v18M3 9h18M3 15h18"></path></svg>';
+              const streetSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="' + strokeColor + '" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22V2M20 22V2M12 2v2M12 8v4M12 16v4"></path></svg>';
+              const courtyardSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="' + strokeColor + '" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>';
+              const bridgeSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="' + strokeColor + '" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20c3-3 6-5 9-5s6 2 9 5M3 12h18M12 12v3M6 12v1.5M18 12v1.5"></path></svg>';
 
               if (type) {
                 const typeUpper = type.toUpperCase();
                 if (typeUpper === 'COMMERCIAL') return cafeSvg;
+                if (typeUpper === 'PARTNER_CAFE') return cafeSvg;
                 if (typeUpper === 'SPACE') return spaceSvg;
+                if (typeUpper === 'PUBLIC_SPACE') return spaceSvg;
+                if (typeUpper === 'FREE_PLACE') return spaceSvg;
+                if (typeUpper === 'SOCIAL') return spaceSvg;
                 if (typeUpper === 'EMBANKMENT') return waterSvg;
                 if (typeUpper === 'SQUARE') return squareSvg;
                 if (typeUpper === 'STREET') return streetSvg;
@@ -1253,33 +1360,79 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
               if (cat.includes("event") || cat.includes("мероприятие")) return eventSvg;
               return isCommercial ? cafeSvg : parkSvg;
             }
+
+            function getFreePlaceClass(type) {
+              const normalized = String(type || '').toUpperCase();
+              if (normalized === 'EMBANKMENT' || normalized === 'BRIDGE') return 'pin-water';
+              if (normalized === 'COURTYARD' || normalized === 'STREET' || normalized === 'SPACE') return 'pin-urban';
+              if (normalized === 'MONUMENT' || normalized === 'SIGHT') return 'pin-culture';
+              return 'pin-green';
+            }
+
+            function shouldShowLocation(meta, zoom) {
+              if (meta.isPartner || meta.isEvent || meta.id === activeMarkerId) return true;
+              if (zoom <= 12) return meta.isPopular;
+              if (zoom <= 14) {
+                return meta.isPopular || meta.qualityScore >= 80 ||
+                  ['PARK', 'EMBANKMENT', 'MONUMENT', 'SIGHT'].includes(meta.type);
+              }
+              return true;
+            }
+
+            function refreshVisibleLocations() {
+              if (!markersGroup) return;
+              const zoom = map.getZoom();
+              markersGroup.clearLayers();
+              Object.keys(markersMap).forEach(id => {
+                const marker = markersMap[id];
+                const meta = markerMeta[id];
+                if (meta && shouldShowLocation(meta, zoom)) {
+                  markersGroup.addLayer(marker);
+                }
+              });
+            }
             
             window.setLocations = function(locs) {
               markersGroup.clearLayers();
               for (let id in markersMap) delete markersMap[id];
+              for (let id in markerMeta) delete markerMeta[id];
               
               locs.forEach(location => {
                 const lat = Number(location.latitude);
                 const lon = Number(location.longitude);
-                const isCommercial = location.type === 'COMMERCIAL';
-                const isEvent = location.type === 'EVENT';
-                let colorClass = 'pin-social';
+                const typeUpper = String(location.type || '').toUpperCase();
+                const isCommercial = Boolean(location.isPartner) || typeUpper === 'COMMERCIAL' || typeUpper === 'PARTNER_CAFE';
+                const isEvent = typeUpper === 'EVENT';
+                const isFree = !isCommercial && !isEvent;
+                const score = Number(location.qualityScore || 0);
+                let colorClass = 'pin-free ' + getFreePlaceClass(typeUpper);
                 if (isCommercial) {
-                  colorClass = 'pin-commercial';
+                  colorClass = 'pin-partner';
                 } else if (isEvent) {
                   colorClass = 'pin-event';
+                } else if (isFree && score >= 80) {
+                  colorClass += ' pin-free-high';
                 }
-                const svg = getSvgIcon(location.type, location.category, isCommercial);
+                const svg = getSvgIcon(location.type, location.category, isCommercial, colorClass);
                 
                 const icon = L.divIcon({
                   className: 'custom-marker-pin ' + colorClass,
                   html: '<div class="pin-container"><div class="pin-bubble">' + svg + '</div><div class="pin-pointer"></div></div>',
-                  iconSize: [36, 44],
-                  iconAnchor: [18, 44]
+                  iconSize: isCommercial || isEvent ? [38, 38] : [30, 30],
+                  iconAnchor: isCommercial || isEvent ? [19, 19] : [15, 15]
                 });
                 
-                const marker = L.marker([lat, lon], { icon });
+                const zIndexOffset = isCommercial ? 700 : isEvent ? 900 : (location.isPopular ? 400 : 100);
+                const marker = L.marker([lat, lon], { icon, zIndexOffset });
                 markersMap[location.id] = marker;
+                markerMeta[location.id] = {
+                  id: String(location.id),
+                  type: typeUpper,
+                  isPartner: isCommercial,
+                  isEvent: isEvent,
+                  isPopular: Boolean(location.isPopular),
+                  qualityScore: score
+                };
                 
                 marker.on('click', () => {
                   window.ReactNativeWebView.postMessage(JSON.stringify({
@@ -1289,8 +1442,8 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
                   window.setActiveMarker(location.id);
                 });
                 
-                markersGroup.addLayer(marker);
               });
+              refreshVisibleLocations();
             };
             
             window.setActiveMarker = function(id) {
@@ -1299,6 +1452,7 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
                 if (prevEl) prevEl.classList.remove('active');
               }
               activeMarkerId = id;
+              refreshVisibleLocations();
               if (id && markersMap[id]) {
                 const marker = markersMap[id];
                 markersGroup.zoomToShowLayer(marker, function() {
@@ -1325,13 +1479,16 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
                 const lon = Number(friend.longitude);
                 if (lat === 0 && lon === 0) return;
                 
-                const initials = friend.username.substring(0, 2).toUpperCase();
+                const initials = String(friend.displayName || friend.username).substring(0, 1).toUpperCase();
                 const statusClass = 'status-' + (friend.status || 'walking');
+                const avatarHtml = friend.avatarUrl
+                  ? '<img src="' + friend.avatarUrl + '" alt="" />'
+                  : initials;
                 const icon = L.divIcon({
                   className: 'friend-location-marker',
-                  html: '<div class="friend-container ' + statusClass + '"><div class="friend-avatar-wrapper"><div class="friend-avatar-glow"></div><div class="friend-avatar">' + initials + '</div><div class="friend-status-dot"></div></div><div class="friend-pointer"></div></div><div class="friend-name-tag">' + friend.username + '</div>',
-                  iconSize: [44, 62],
-                  iconAnchor: [22, 62]
+                  html: '<div class="friend-container ' + statusClass + '"><div class="friend-avatar-wrapper"><div class="friend-avatar-glow"></div><div class="friend-avatar">' + avatarHtml + '</div><div class="friend-status-dot"></div></div><div class="friend-pointer"></div></div><div class="friend-name-tag">' + (friend.displayName || friend.username) + '</div>',
+                  iconSize: [58, 68],
+                  iconAnchor: [29, 34]
                 });
                 
                 const marker = L.marker([lat, lon], { icon, zIndexOffset: 1500 }).addTo(map);
@@ -1527,9 +1684,9 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
         <View style={[
           styles.floatingHeaderBar,
           {
-            backgroundColor: activeThemeColors.glass,
-            borderColor: activeThemeColors.border,
-            shadowColor: activeThemeColors.shadow,
+            backgroundColor: 'transparent',
+            borderColor: 'transparent',
+            shadowColor: 'transparent',
           }
         ]}>
           {/* Left Avatar Button */}
@@ -1551,14 +1708,14 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
               style={[
                 styles.avatarRing,
                 {
-                  borderColor: getMyStatusColor(myStatus),
+                  borderColor: activeThemeColors.card,
                   backgroundColor: activeThemeColors.card,
                 }
               ]}
               onPress={onOpenProfile || (() => setShowFriendsListModal(true))}
             >
               {resolveAvatarUrl(profile?.avatarUrl) ? (
-                <Image source={{ uri: resolveAvatarUrl(profile?.avatarUrl)! }} style={{ width: 34, height: 34, borderRadius: 17 }} />
+                <Image source={{ uri: resolveAvatarUrl(profile?.avatarUrl)! }} style={{ width: 42, height: 42, borderRadius: 21 }} />
               ) : (
                 <View style={[styles.avatarInner, { backgroundColor: activeThemeColors.border }]}>
                   <Text style={[styles.avatarInitials, { color: activeThemeColors.primary }]}>{(profile?.displayName || profile?.username || '?').charAt(0).toUpperCase()}</Text>
@@ -1572,8 +1729,9 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
             style={[
               styles.searchBarInputWrapper,
               {
-                backgroundColor: theme === 'light' ? 'rgba(241, 245, 249, 0.9)' : 'rgba(30, 41, 59, 0.9)',
-                borderColor: activeThemeColors.border,
+                backgroundColor: activeThemeColors.card,
+                borderColor: 'transparent',
+                shadowColor: activeThemeColors.shadow,
               }
             ]}
             activeOpacity={0.9}
@@ -1612,12 +1770,13 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
               styles.filterBtn,
               {
                 backgroundColor: activeThemeColors.card,
-                borderColor: activeThemeColors.border,
+                borderColor: 'transparent',
+                shadowColor: activeThemeColors.shadow,
               }
             ]}
             onPress={() => setShowFilterTagSheet(true)}
           >
-            <Ionicons name="options-outline" size={18} color={selectedTypeFilter !== 'ALL' ? '#10b981' : activeThemeColors.text} />
+            <Ionicons name="options-outline" size={18} color={selectedTypeFilter !== 'ALL' ? activeThemeColors.primary : activeThemeColors.text} />
           </TouchableOpacity>
         </View>
       )}
@@ -1987,8 +2146,9 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
           style={[
             styles.homeFocusButton, 
             { 
-              backgroundColor: '#10b981', 
-              shadowColor: 'rgba(16, 185, 129, 0.4)',
+              backgroundColor: activeThemeColors.glass,
+              borderColor: activeThemeColors.border,
+              shadowColor: activeThemeColors.shadow,
               bottom: bottomSheetIndex === 0
                 ? containerHeight * 0.35 + 16
                 : bottomSheetIndex === 1
@@ -1998,8 +2158,8 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
           ]} 
           onPress={handleStartHomeDetox}
         >
-          <Ionicons name="home-outline" size={18} color="white" style={{ marginRight: 6 }} />
-          <Text style={styles.homeFocusButtonText}>Домашний фокус</Text>
+          <Ionicons name="home-outline" size={17} color={activeThemeColors.primary} style={{ marginRight: 6 }} />
+          <Text style={[styles.homeFocusButtonText, { color: activeThemeColors.text }]}>Домашний фокус</Text>
         </TouchableOpacity>
       )}
 
@@ -2096,7 +2256,7 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
 
           {/* Locate Me */}
           <TouchableOpacity style={[styles.controlButton, { backgroundColor: activeThemeColors.glass, borderColor: activeThemeColors.border, shadowColor: activeThemeColors.shadow }]} onPress={handleCenterUser}>
-            <Ionicons name="locate-outline" size={20} color="#10b981" />
+            <Ionicons name="locate-outline" size={20} color={activeThemeColors.primary} />
           </TouchableOpacity>
         </View>
       )}
@@ -2114,7 +2274,7 @@ export default function RadarScreen({ onOpenProfile }: { onOpenProfile?: () => v
             setSelectedFriend(null);
           }
         }}
-        backgroundStyle={{ backgroundColor: activeThemeColors.card, borderTopLeftRadius: 24, borderTopRightRadius: 24 }}
+        backgroundStyle={{ backgroundColor: activeThemeColors.card, borderTopLeftRadius: 30, borderTopRightRadius: 30 }}
         handleIndicatorStyle={{ backgroundColor: theme === 'light' ? '#cbd5e1' : '#334155', width: 40 }}
       >
         <BottomSheetView style={styles.sheetContent}>
@@ -2467,23 +2627,22 @@ const styles = StyleSheet.create({
   homeFocusButton: {
     position: 'absolute',
     left: 16,
-    height: 44,
-    borderRadius: 22,
+    height: 40,
+    borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#059669',
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
+    paddingHorizontal: 13,
     zIndex: 10,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 14,
+    elevation: 3,
   },
   homeFocusButtonText: {
-    color: 'white',
-    fontSize: 13,
-    fontWeight: '700',
+    color: '#355F52',
+    fontSize: 12,
+    fontWeight: '600',
   },
   friendsPanel: {
     position: 'absolute',
@@ -2729,28 +2888,28 @@ const styles = StyleSheet.create({
   controlsContainer: {
     position: 'absolute',
     right: 16,
-    gap: 12,
+    gap: 10,
     zIndex: 10,
   },
   controlButton: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    borderWidth: 1,
+    borderWidth: 0.5,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
-    elevation: 4,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.09,
+    shadowRadius: 14,
+    elevation: 3,
   },
   zoomGroup: {
     borderRadius: 22,
-    borderWidth: 1,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
-    elevation: 4,
+    borderWidth: 0.5,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.09,
+    shadowRadius: 14,
+    elevation: 3,
     overflow: 'hidden',
   },
   zoomButton: {
@@ -2930,32 +3089,32 @@ const styles = StyleSheet.create({
     paddingVertical: 40,
   },
   placeSheetScroll: { paddingHorizontal: 8, paddingBottom: 16 },
-  placePhotoWrap: { height: 146, borderRadius: 24, overflow: 'hidden', backgroundColor: '#e5e7eb', marginBottom: -16 },
+  placePhotoWrap: { height: 174, borderRadius: 22, overflow: 'hidden', backgroundColor: '#e5e7eb', marginBottom: 10 },
   placePhoto: { width: '100%', height: '100%' },
-  placePhotoShade: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.08)' },
+  placePhotoShade: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.04)' },
   placeDistancePill: { position: 'absolute', left: 12, top: 12, minHeight: 30, borderRadius: 15, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(17,24,39,0.72)' },
   placeDistanceText: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
   placePhotoActions: { position: 'absolute', right: 10, top: 10, flexDirection: 'row', gap: 8 },
   placeRoundButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.94)', alignItems: 'center', justifyContent: 'center' },
-  placeInfoCard: { borderRadius: 24, backgroundColor: '#FFFFFF', padding: 12, paddingTop: 15, gap: 11 },
+  placeInfoCard: { borderRadius: 22, backgroundColor: '#FFFFFF', padding: 14, gap: 13 },
   placeTitleBlock: { gap: 3 },
-  placeTitle: { color: '#111827', fontSize: 19, fontWeight: '800', letterSpacing: 0, lineHeight: 23 },
+  placeTitle: { color: '#111827', fontSize: 20, fontWeight: '700', letterSpacing: -0.25, lineHeight: 25 },
   placeMeta: { color: '#64748b', fontSize: 12, fontWeight: '600', lineHeight: 16 },
   placeInfoRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   placeInfoText: { flex: 1, color: '#64748b', fontSize: 12, fontWeight: '500', lineHeight: 16 },
-  placeContextCard: { minHeight: 52, borderRadius: 17, backgroundColor: '#ecfdf5', padding: 9, flexDirection: 'row', alignItems: 'center', gap: 9 },
-  placeContextCardPartner: { backgroundColor: '#fff7e6' },
-  placeContextIcon: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#d1fae5', alignItems: 'center', justifyContent: 'center' },
+  placeContextCard: { minHeight: 54, borderRadius: 16, backgroundColor: '#f2f6f3', padding: 10, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  placeContextCardPartner: { backgroundColor: '#fbf6ea' },
+  placeContextIcon: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#e2eee7', alignItems: 'center', justifyContent: 'center' },
   placeContextIconPartner: { backgroundColor: '#fdecc8' },
   placeContextTitle: { color: '#1f2937', fontSize: 12, fontWeight: '700', lineHeight: 15 },
   placeContextSubtitle: { color: '#64748b', fontSize: 11, fontWeight: '500', lineHeight: 15, marginTop: 1 },
   placeActionsRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  placePrimaryButton: { flex: 1.16, height: 42, borderRadius: 21, backgroundColor: '#10b981', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 12 },
-  placeRouteButton: { backgroundColor: '#111827' },
+  placePrimaryButton: { flex: 1.16, height: 44, borderRadius: 16, backgroundColor: '#355F52', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 12 },
+  placeRouteButton: { backgroundColor: '#26322e' },
   placePrimaryText: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
-  placeSecondaryButton: { flex: 0.95, height: 42, borderRadius: 21, backgroundColor: '#f1f5f9', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingHorizontal: 12 },
+  placeSecondaryButton: { flex: 0.95, height: 44, borderRadius: 16, backgroundColor: '#f3f5f4', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingHorizontal: 12 },
   placeSecondaryText: { color: '#64748b', fontSize: 12, fontWeight: '700' },
-  placeIconButton: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
+  placeIconButton: { width: 44, height: 44, borderRadius: 16, backgroundColor: '#f8faf9', borderWidth: 1, borderColor: '#e6ebe8', alignItems: 'center', justifyContent: 'center' },
   placeDetailsBlock: { gap: 4 },
   placeDetailsTitle: { color: '#111827', fontSize: 13, fontWeight: '800', lineHeight: 17 },
   placeDescription: { color: '#64748b', fontSize: 12, fontWeight: '500', lineHeight: 17 },
@@ -3116,19 +3275,19 @@ const styles = StyleSheet.create({
     top: Platform.OS === 'ios' ? 54 : 44,
     left: 16,
     right: 16,
-    height: 56,
-    borderRadius: 28,
-    borderWidth: 1,
+    height: 58,
+    borderRadius: 29,
+    borderWidth: 0,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 8,
+    paddingHorizontal: 0,
     zIndex: 100,
-    elevation: 10,
+    elevation: 0,
   },
   avatarContainer: {
     position: 'relative',
-    width: 44,
-    height: 44,
+    width: 50,
+    height: 50,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -3137,16 +3296,21 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    borderWidth: 2,
+    borderWidth: 1.5,
   },
   avatarRing: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     borderWidth: 2,
+    borderColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 4,
   },
   avatarInner: {
     width: 34,
@@ -3163,30 +3327,38 @@ const styles = StyleSheet.create({
   searchBarInputWrapper: {
     flex: 1,
     marginHorizontal: 8,
-    height: 40,
-    borderRadius: 20,
-    borderWidth: 1,
+    height: 56,
+    borderRadius: 28,
+    borderWidth: 0,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
+    paddingHorizontal: 16,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.1,
+    shadowRadius: 16,
+    elevation: 4,
   },
   searchBarTextInput: {
     flex: 1,
-    fontSize: 13,
+    fontSize: 14,
     padding: 0,
     height: '100%',
   },
   searchBarTextPlaceholder: {
     flex: 1,
-    fontSize: 13,
+    fontSize: 14,
   },
   filterBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    borderWidth: 1,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    borderWidth: 0,
     alignItems: 'center',
     justifyContent: 'center',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.1,
+    shadowRadius: 16,
+    elevation: 4,
   },
   searchOverlayBackdrop: {
     position: 'absolute',
